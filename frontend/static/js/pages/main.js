@@ -456,13 +456,36 @@ class Blombooru {
         return response.json();
     }
 
-    showSearchSyntaxGuide() {
+    async showSearchSyntaxGuide() {
+        const lang = window.CURRENT_LANGUAGE || 'en';
+        if (!this.cachedSearchGuideHtml) {
+            this.cachedSearchGuideHtml = {};
+        }
+
+        if (!this.cachedSearchGuideHtml[lang]) {
+            try {
+                const response = await fetch(`/api/search/syntax-guide?lang=${encodeURIComponent(lang)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.html) {
+                        this.cachedSearchGuideHtml[lang] = data.html;
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load search syntax guide:', error);
+            }
+        }
+
+        const html = this.cachedSearchGuideHtml[lang] || '';
+        const content = `<div class="text-left space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">${html}</div>`;
+
         if (!this.searchGuideModal) {
             this.searchGuideModal = new ModalHelper({
                 id: 'search-syntax-modal',
                 type: 'info',
+                maxWidth: 'max-w-2xl',
                 title: window.i18n.t('common.search_syntax_guide'),
-                message: this.getSearchSyntaxContent(),
+                message: content,
                 showIcon: false,
                 confirmText: window.i18n.t('common.got_it'),
                 cancelText: window.i18n.t('common.keybindings'),
@@ -470,16 +493,27 @@ class Blombooru {
                 cancelId: 'search-guide-keybindings'
             });
 
-            const keybindingsBtn = document.getElementById('search-guide-keybindings');
-            if (keybindingsBtn) {
-                keybindingsBtn.onclick = (e) => {
-                    e.preventDefault();
-                    this.searchGuideModal.hide();
-                    this.showKeybindingsGuide();
-                };
-            }
+            this.setupSearchGuideKeybindingsBtn();
+        } else {
+            this.searchGuideModal.updateContent({
+                message: content
+            });
+            this.setupSearchGuideKeybindingsBtn();
         }
         this.searchGuideModal.show();
+    }
+
+    setupSearchGuideKeybindingsBtn() {
+        const keybindingsBtn = document.getElementById('search-guide-keybindings');
+        if (keybindingsBtn) {
+            keybindingsBtn.onclick = (e) => {
+                e.preventDefault();
+                if (this.searchGuideModal) {
+                    this.searchGuideModal.hide();
+                }
+                this.showKeybindingsGuide();
+            };
+        }
     }
 
     showKeybindingsGuide() {
@@ -588,74 +622,6 @@ class Blombooru {
         const div = document.createElement('div');
         div.textContent = String(text ?? '');
         return div.innerHTML;
-    }
-
-    getSearchSyntaxContent() {
-        return `
-            <div class="text-left space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                <div class="bg p-2 border-2 border-info">
-                    <h3 class="font-bold text-lg mb-2 text-info">${window.i18n.t('search.basic_tags')}</h3>
-                    <ul class="list-disc pl-5 space-y-1 text-sm">
-                        <li><code class="surface">tag1 tag2</code>: ${window.i18n.t('search.basic_desc_both')}</li>
-                        <li><code class="surface">-tag1</code>: ${window.i18n.t('search.basic_desc_exclude')}</li>
-                        <li><code class="surface">tag*</code>: ${window.i18n.t('search.basic_desc_wildcard')}</li>
-                        <li><code class="surface">?tag</code>: ${window.i18n.t('search.basic_desc_fuzzy')}</li>
-                    </ul>
-                </div>
-
-                <div class="bg p-2 border-2 border-info">
-                    <h3 class="font-bold text-lg mb-2 text-info">${window.i18n.t('search.ranges')}</h3>
-                    <p class="mb-2 text-xs">${window.i18n.t('search.ranges_operators')}: <code>:</code>, <code>..</code>, <code>&gt;=</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&lt;</code>, <code>!=</code></p>
-                    <ul class="list-disc pl-5 space-y-1 text-sm">
-                        <li><code class="surface">id:100</code>: ${window.i18n.t('search.ranges_exact')}</li>
-                        <li><code class="surface">id:100..200</code>: ${window.i18n.t('search.ranges_between')}</li>
-                        <li><code class="surface">id:&gt;=100</code>: ${window.i18n.t('search.ranges_gte')}</li>
-                        <li><code class="surface">id:1,2,3</code>: ${window.i18n.t('search.ranges_in_list')}</li>
-                        <li><code class="surface">gentags:13,16,&lt;8,&gt;91</code>: ${window.i18n.t('search.ranges_multi_list')}</li>
-                        <li><code class="surface">gentags:6,4 gentags:8,&gt;4</code>: ${window.i18n.t('search.ranges_folding')} (<code class="surface">gentags:&gt;=4</code>)</li>
-                    </ul>
-                    <p class="mt-2 text-xs text-secondary">${window.i18n.t('search.ranges_note')}</p>
-                </div>
-
-                <div class="bg p-2 border-2 border-info">
-                    <h3 class="font-bold text-lg mb-2 text-info">${window.i18n.t('search.meta_qualifiers')}</h3>
-                    <ul class="list-disc pl-5 space-y-1 text-sm">
-                        <li><code class="surface">width</code>, <code class="surface">height</code>: ${window.i18n.t('search.meta_dimensions')}</li>
-                        <li><code class="surface">filesize</code>: ${window.i18n.t('search.meta_filesize')}</li>
-                        <li><code class="surface">date</code>, <code class="surface">age</code>: ${window.i18n.t('search.meta_date')}</li>
-                        <li><code class="surface">rating</code>: ${window.i18n.t('search.meta_rating')}</li>
-                        <li><code class="surface">source</code>: ${window.i18n.t('search.meta_source')}</li>
-                        <li><code class="surface">filetype</code>: ${window.i18n.t('search.meta_filetype')}</li>
-                        <li><code class="surface">tagcount</code>, <code class="surface">gentags</code>, <code class="surface">chartags</code>...: ${window.i18n.t('search.meta_tagcount')}</li>
-                    </ul>
-                </div>
-
-                <div class="bg p-2 border-2 border-info">
-                    <h3 class="font-bold text-lg mb-2 text-info">${window.i18n.t('search.sorting')}</h3>
-                    <p class="mb-2 text-sm">${window.i18n.t('search.sorting_desc').replace('order:value', '<code>order:value</code>')}</p>
-                    <ul class="list-disc pl-5 space-y-1 text-sm">
-                        <li><code class="surface">id</code> / <code class="surface">id_desc</code>: ${window.i18n.t('search.sorting_newest')}</li>
-                        <li><code class="surface">id_asc</code>: ${window.i18n.t('search.sorting_oldest')}</li>
-                        <li><code class="surface">date_desc</code> / <code class="surface">date_asc</code>: ${window.i18n.t('search.sorting_date')}</li>
-                        <li><code class="surface">filesize</code> / <code class="surface">filesize_asc</code>: ${window.i18n.t('search.sorting_filesize')}</li>
-                        <li><code class="surface">width_desc</code> / <code class="surface">height_desc</code> / <code class="surface">mpixels_desc</code>: ${window.i18n.t('search.sorting_dimensions')}</li>
-                        <li><code class="surface">tagcount_desc</code> / <code class="surface">tagcount_asc</code>: ${window.i18n.t('search.sorting_tagcount')}</li>
-                        <li><code class="surface">landscape</code> / <code class="surface">portrait</code>: ${window.i18n.t('search.sorting_aspect')}</li>
-                    </ul>
-                </div>
-
-                <div class="bg p-2 border-2 border-info">
-                    <h3 class="font-bold text-lg mb-2 text-info">${window.i18n.t('search.examples')}</h3>
-                    <ul class="list-disc pl-5 space-y-1 text-sm">
-                        <li><code class="surface">cat source:none rating:s</code>: ${window.i18n.t('search.example_cat')}</li>
-                        <li><code class="surface">landscape filetype:mp4 filesize:&gt;5mb</code>: ${window.i18n.t('search.example_landscape')}</li>
-                        <li><code class="surface">id:1..100 order:id_asc</code>: ${window.i18n.t('search.example_id')}</li>
-                        <li><code class="surface">?girl? *_eyes -dog</code>: ${window.i18n.t('search.example_fuzzy')}</li>
-                        <li><code class="surface">tagcount:&gt;20 arttags:0</code>: ${window.i18n.t('search.example_tagcount')}</li>
-                    </ul>
-                </div>
-            </div>
-        `;
     }
 }
 
