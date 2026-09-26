@@ -66,7 +66,7 @@ class AcknowledgementsModal {
                         class="w-full bg px-3 py-1.5 border text text-xs sm:text-sm focus:outline-none focus:border-primary hover:border-primary transition-colors"
                         autocomplete="off" />
                 </div>
-                <div id="acknowledgements-scroll-body" class="acknowledgements-content overflow-y-auto custom-scrollbar flex-1 text-left text-sm mt-2 space-y-3" style="overscroll-behavior: contain;">
+                <div id="acknowledgements-scroll-body" class="overflow-y-auto custom-scrollbar flex-1 text-left text-sm mt-2 space-y-3" style="overscroll-behavior: contain;">
                     ${htmlContent}
                 </div>
                 <div class="flex pt-4 border-t justify-center mt-3">

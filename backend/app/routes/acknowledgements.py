@@ -4,18 +4,14 @@ from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from wenmode import Wenmode
-from wenmode.presets import github
 
 from ..config import settings
 from ..utils.logger import logger
+from ..utils.markdown import render_markdown
 
 router = APIRouter(prefix="/api/acknowledgements", tags=["acknowledgements"])
 
 ACKNOWLEDGEMENTS_PATH = settings.BASE_DIR / "ACKNOWLEDGEMENTS.md"
-wen = Wenmode(github())
-
-_EXTERNAL_LINK_RE = re.compile(r'<a\s+(?!.*?target=)(href="https?://[^"]+")')
 
 _cached_html: Optional[str] = None
 _cached_mtime: Optional[float] = None
@@ -23,15 +19,9 @@ _cached_mtime: Optional[float] = None
 class AcknowledgementsResponse(BaseModel):
     html: Optional[str] = None
 
-def _open_links_in_new_tab(rendered_html: str) -> str:
-    return _EXTERNAL_LINK_RE.sub(
-        r'<a target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" \1',
-        rendered_html,
-    )
-
 def _render_preamble(preamble_text: str) -> str:
     try:
-        rendered = _open_links_in_new_tab(wen.render(preamble_text))
+        rendered = render_markdown(preamble_text, heading_color="primary")
     except Exception as e:
         logger.error(f"Error rendering acknowledgements preamble: {e}")
         rendered = f"<pre>{html.escape(preamble_text)}</pre>"
@@ -55,7 +45,7 @@ def _render_package_card(pkg: dict) -> str:
     full_md = f"{header}\n\n{meta_md}\n\n**License Text:**\n\n```\n{license_text}\n```"
 
     try:
-        rendered = _open_links_in_new_tab(wen.render(full_md))
+        rendered = render_markdown(full_md, heading_color="primary")
     except Exception as e:
         logger.error(f"Error rendering dependency card for {name}: {e}")
         rendered = f"<h3>{html.escape(name)}</h3><pre>{html.escape(license_text)}</pre>"

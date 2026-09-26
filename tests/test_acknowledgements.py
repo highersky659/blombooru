@@ -37,6 +37,8 @@ class TestAcknowledgements(unittest.TestCase):
         self.assertIsNotNone(html)
         self.assertIn("acknowledgement-preamble", html)
         self.assertIn("acknowledgement-card", html)
+        self.assertIn("text-primary", html)
+        self.assertIn("bg-surface", html)
         self.assertIn("fastapi", html)
         self.assertIn("tailwindcss", html)
         self.assertIn("chart.js", html)
