@@ -322,12 +322,14 @@
             const searchInputMobile = document.getElementById('search-input-mobile');
             if (searchInput) {
                 new TagAutocomplete(searchInput, {
-                    multipleValues: true
+                    multipleValues: true,
+                    enableQualifiers: true
                 });
             }
             if (searchInputMobile) {
                 new TagAutocomplete(searchInputMobile, {
-                    multipleValues: true
+                    multipleValues: true,
+                    enableQualifiers: true
                 });
             }
         </script>

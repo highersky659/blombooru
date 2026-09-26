@@ -8,6 +8,7 @@ class TagAutocomplete {
             containerClasses: '',
             appendSpace: true,
             allowCreate: false,
+            enableQualifiers: false,
             ...options
         };
 
@@ -55,14 +56,29 @@ class TagAutocomplete {
 
     async onInput() {
         const query = this.getCurrentQuery();
+        this._currentQuery = query;
         if (query.length < 1) {
             this.hideSuggestions();
             return;
         }
 
+        if (this.options.enableQualifiers) {
+            const qualifierSuggestions = this.getQualifierSuggestions(query);
+            if (qualifierSuggestions !== null) {
+                if (qualifierSuggestions.length > 0) {
+                    this.showSuggestions(qualifierSuggestions, query);
+                } else {
+                    this.hideSuggestions();
+                }
+                return;
+            }
+        }
+
         try {
             const suggestions = await this.fetchSuggestions(query);
-            this.showSuggestions(suggestions, query);
+            if (this._currentQuery === query) {
+                this.showSuggestions(suggestions, query);
+            }
         } catch (error) {
             console.error('Error fetching suggestions:', error);
         }
@@ -163,9 +179,10 @@ class TagAutocomplete {
     showSuggestions(suggestions, query) {
         const hasResults = suggestions.length > 0;
 
+        const isQualifier = suggestions.some(t => t.is_qualifier);
         const normalizedQuery = query ? query.toLowerCase().replace(/ /g, '_') : '';
         const exactMatchExists = suggestions.some(t => t.name === normalizedQuery || (t.is_alias && t.alias_name === normalizedQuery));
-        const hasCreate = this.options.allowCreate && query && query.length > 0 && !exactMatchExists;
+        const hasCreate = !isQualifier && this.options.allowCreate && query && query.length > 0 && !exactMatchExists;
 
         if (!hasResults && !hasCreate) {
             this.hideSuggestions();
@@ -184,7 +201,16 @@ class TagAutocomplete {
                             <span class="text-secondary">&#8594;</span>
                             <span class="tag-name">${this.escapeHtml(tag.name)}</span>
                         </span>
-                        <span class="tag-count">${this.escapeHtml(String(tag.count))}</span>
+                        ${tag.count !== undefined && tag.count !== null && tag.count !== '' ? `<span class="tag-count">${this.escapeHtml(String(tag.count))}</span>` : ''}
+                    </div>
+                `;
+                }
+                if (tag.is_qualifier) {
+                    const qualifierPart = tag.qualifier_prefix || (tag.name.includes(':') ? tag.name.substring(0, tag.name.indexOf(':') + 1) : tag.name);
+                    const valPart = tag.val !== undefined ? tag.val : (tag.name.includes(':') ? tag.name.substring(tag.name.indexOf(':') + 1) : '');
+                    return `
+                    <div class="tag-suggestion" data-index="${index}" data-name="${this.escapeHtml(tag.name)}">
+                        <span class="tag-name"><code class="bg p-0 font-mono text-xs">${this.escapeHtml(qualifierPart)}</code>${this.escapeHtml(valPart)}</span>
                     </div>
                 `;
                 }
@@ -194,7 +220,7 @@ class TagAutocomplete {
                         <span class="tag-category"><span class="tag-text ${this.escapeHtml(tag.category)}">${this.escapeHtml(tag.category)}</span></span>
                         <span class="tag-name">${this.escapeHtml(tag.name)}</span>
                     </span>
-                    <span class="tag-count">${this.escapeHtml(String(tag.count))}</span>
+                    ${tag.count !== undefined && tag.count !== null && tag.count !== '' ? `<span class="tag-count">${this.escapeHtml(String(tag.count))}</span>` : ''}
                 </div>
             `;
             }).join('');
@@ -580,6 +606,68 @@ class TagAutocomplete {
         }
     }
 
+    getQualifierSuggestions(query) {
+        if (!query) return null;
+
+        const match = query.match(/^([~-]?)([a-zA-Z0-9_]+):(.*)$/);
+        if (!match) return null;
+
+        const prefix = match[1] || '';
+        const rawKey = match[2].toLowerCase();
+        const valFilter = match[3].trim();
+
+        const canonicalKey = TagAutocomplete.QUALIFIERS[rawKey]
+            ? rawKey
+            : TagAutocomplete.QUALIFIER_ALIASES[rawKey];
+
+        if (!canonicalKey || !TagAutocomplete.QUALIFIERS[canonicalKey]) {
+            return null;
+        }
+
+        const items = TagAutocomplete.QUALIFIERS[canonicalKey];
+        const valLower = valFilter.toLowerCase();
+
+        let filtered = items;
+        if (valLower) {
+            if (valLower.length === 1) {
+                filtered = items.filter(val => val.toLowerCase().startsWith(valLower));
+            } else {
+                const matched = items.filter(val => {
+                    const itemVal = val.toLowerCase();
+                    return itemVal.startsWith(valLower) || itemVal.includes(valLower);
+                });
+
+                if (matched.length > 0) {
+                    matched.sort((a, b) => {
+                        const aVal = a.toLowerCase();
+                        const bVal = b.toLowerCase();
+                        const aStarts = aVal.startsWith(valLower) ? 0 : 1;
+                        const bStarts = bVal.startsWith(valLower) ? 0 : 1;
+                        if (aStarts !== bStarts) return aStarts - bStarts;
+                        const aIncludes = aVal.includes(valLower) ? 0 : 1;
+                        const bIncludes = bVal.includes(valLower) ? 0 : 1;
+                        if (aIncludes !== bIncludes) return aIncludes - bIncludes;
+                        return 0;
+                    });
+                    filtered = matched;
+                }
+                // If nothing matched, keep showing the full item list
+            }
+            // If single-char produced no results, fall back to full list too
+            if (filtered.length === 0) {
+                filtered = items;
+            }
+        }
+
+        const qualifierPrefix = `${prefix}${rawKey}:`;
+        return filtered.map(val => ({
+            name: `${qualifierPrefix}${val}`,
+            qualifier_prefix: qualifierPrefix,
+            val: val,
+            is_qualifier: true
+        }));
+    }
+
     destroy() {
         if (this.onInputBound) {
             this.input.removeEventListener('input', this.onInputBound);
@@ -596,3 +684,51 @@ class TagAutocomplete {
         }
     }
 }
+
+TagAutocomplete.QUALIFIERS = {
+    child: ['any', 'none', '123', '>100', '1..100'],
+    parent: ['none', 'any', '100', '>100', '1..100'],
+    album: ['any', 'none', 'favorites', '123'],
+    album_tree: ['artbook', '1'],
+    rating: ['s', 'q', 'e', 'safe', 'questionable', 'explicit', 's,q'],
+    tagcount: ['>20', '>=5', '<10', '<=15', '0', '1..10', '!=0'],
+    gentags: ['>10', '>=4', '<8', '0', '1..5'],
+    arttags: ['0', '>1', '>=1', '1..3'],
+    chartags: ['>2', '0', '>=1', '1..5'],
+    copytags: ['>1', '0', '>=1', '1..3'],
+    metatags: ['>0', '0', '>=1', '1..5'],
+    filetype: ['png', 'jpg', 'gif', 'mp4', 'webp', 'image', 'video', 'png,jpg'],
+    source: ['none', 'any', 'http', 'twitter', 'pixiv'],
+    id: ['100', '1..100', '>100', '<100', '>=100', '<=100', '!=100', '1,2,3'],
+    width: ['>=1920', '>1080', '<1000', '1080..3840', '1920'],
+    height: ['>=1080', '>720', '<1080', '720..2160', '1080'],
+    duration: ['>30', '<=60', '10..60', '>0', '0'],
+    filesize: ['>5mb', '<1mb', '1mb..5mb', '<=10mb', '>500kb'],
+    date: ['>=2024-01-01', '2024-01-01', '2024-01-01..2024-12-31', '<2023-01-01'],
+    age: ['<24h', '<7d', '1w..1mo', '>1y'],
+    md5: ['<checksum>'],
+    order: [
+        'id_desc', 'id_asc', 'date_desc', 'date_asc',
+        'filesize_desc', 'filesize_asc', 'width_desc', 'height_desc',
+        'mpixels_desc', 'duration_desc', 'duration_asc',
+        'landscape', 'portrait', 'rating_asc', 'rating_desc',
+        'filename_asc', 'filename_desc', 'filetype_desc', 'filetype_asc',
+        'md5_asc', 'tagcount_desc', 'tagcount_asc',
+        'random', 'random:42', 'custom'
+    ]
+};
+
+TagAutocomplete.QUALIFIER_ALIASES = {
+    pool: 'album',
+    pool_tree: 'album_tree',
+    sort: 'order',
+    file_size: 'filesize',
+    size: 'filesize',
+    uploaded_at: 'date',
+    created_at: 'date',
+    time: 'date',
+    tag_count: 'tagcount',
+    tags: 'tagcount',
+    file_type: 'filetype',
+    hash: 'md5'
+};
