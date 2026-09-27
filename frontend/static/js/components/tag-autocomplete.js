@@ -12,6 +12,10 @@ class TagAutocomplete {
             ...options
         };
 
+        this._qualifierCache = {};
+        this._qualifierAbortController = null;
+        this._qualifierDebounceTimer = null;
+
         this.setupAutocomplete();
     }
 
@@ -52,6 +56,23 @@ class TagAutocomplete {
         this.input.addEventListener('input', this.onInputBound);
         this.input.addEventListener('keydown', this.onKeydownBound);
         document.addEventListener('click', this.onDocumentClickBound);
+
+        if (this.options.enableQualifiers) {
+            this._prefetchQualifierExamples();
+        }
+    }
+
+    async _prefetchQualifierExamples() {
+        try {
+            const res = await fetch('/api/search/qualifier-autocomplete?qualifier=album&limit=10');
+            if (res.ok) {
+                const data = await res.json();
+                this._qualifierCache['album'] = data;
+                this._qualifierCache['album_tree'] = data;
+            }
+        } catch (e) {
+            // non-blocking
+        }
     }
 
     async onInput() {
@@ -63,14 +84,10 @@ class TagAutocomplete {
         }
 
         if (this.options.enableQualifiers) {
-            const qualifierSuggestions = this.getQualifierSuggestions(query);
-            if (qualifierSuggestions !== null) {
-                if (qualifierSuggestions.length > 0) {
-                    this.showSuggestions(qualifierSuggestions, query);
-                } else {
-                    this.hideSuggestions();
-                }
-                return;
+            const qualifierMatch = query.match(/^([~-]?)([a-zA-Z0-9_]+):(.*)$/);
+            if (qualifierMatch) {
+                const handled = this.handleQualifierInput(qualifierMatch, query);
+                if (handled) return;
             }
         }
 
@@ -208,9 +225,11 @@ class TagAutocomplete {
                 if (tag.is_qualifier) {
                     const qualifierPart = tag.qualifier_prefix || (tag.name.includes(':') ? tag.name.substring(0, tag.name.indexOf(':') + 1) : tag.name);
                     const valPart = tag.val !== undefined ? tag.val : (tag.name.includes(':') ? tag.name.substring(tag.name.indexOf(':') + 1) : '');
+                    const detailPart = tag.detail ? `<span class="tag-count">${this.escapeHtml(tag.detail)}</span>` : '';
                     return `
                     <div class="tag-suggestion" data-index="${index}" data-name="${this.escapeHtml(tag.name)}">
                         <span class="tag-name"><code class="bg p-0 font-mono text-xs">${this.escapeHtml(qualifierPart)}</code>${this.escapeHtml(valPart)}</span>
+                        ${detailPart}
                     </div>
                 `;
                 }
@@ -606,69 +625,503 @@ class TagAutocomplete {
         }
     }
 
-    getQualifierSuggestions(query) {
-        if (!query) return null;
-
-        const match = query.match(/^([~-]?)([a-zA-Z0-9_]+):(.*)$/);
-        if (!match) return null;
-
+    handleQualifierInput(match, query) {
         const prefix = match[1] || '';
         const rawKey = match[2].toLowerCase();
-        const valFilter = match[3].trim();
+        const valFilter = match[3];
 
         const canonicalKey = TagAutocomplete.QUALIFIERS[rawKey]
             ? rawKey
             : TagAutocomplete.QUALIFIER_ALIASES[rawKey];
 
         if (!canonicalKey || !TagAutocomplete.QUALIFIERS[canonicalKey]) {
-            return null;
+            return false;
         }
 
-        const items = TagAutocomplete.QUALIFIERS[canonicalKey];
-        const valLower = valFilter.toLowerCase();
+        const isEntity = TagAutocomplete.ENTITY_QUALIFIERS && TagAutocomplete.ENTITY_QUALIFIERS.has(canonicalKey);
 
-        let filtered = items;
-        if (valLower) {
-            if (valLower.length === 1) {
-                filtered = items.filter(val => val.toLowerCase().startsWith(valLower));
+        if (isEntity) {
+            this.handleEntityQualifierInput(canonicalKey, prefix, rawKey, valFilter, query);
+        } else {
+            const suggestions = this.getStaticQualifierSuggestions(canonicalKey, prefix, rawKey, valFilter, query);
+            if (suggestions && suggestions.length > 0) {
+                this.showSuggestions(suggestions, query);
             } else {
-                const matched = items.filter(val => {
-                    const itemVal = val.toLowerCase();
-                    return itemVal.startsWith(valLower) || itemVal.includes(valLower);
-                });
-
-                if (matched.length > 0) {
-                    matched.sort((a, b) => {
-                        const aVal = a.toLowerCase();
-                        const bVal = b.toLowerCase();
-                        const aStarts = aVal.startsWith(valLower) ? 0 : 1;
-                        const bStarts = bVal.startsWith(valLower) ? 0 : 1;
-                        if (aStarts !== bStarts) return aStarts - bStarts;
-                        const aIncludes = aVal.includes(valLower) ? 0 : 1;
-                        const bIncludes = bVal.includes(valLower) ? 0 : 1;
-                        if (aIncludes !== bIncludes) return aIncludes - bIncludes;
-                        return 0;
-                    });
-                    filtered = matched;
-                }
-                // If nothing matched, keep showing the full item list
+                this.hideSuggestions();
             }
-            // If single-char produced no results, fall back to full list too
-            if (filtered.length === 0) {
-                filtered = items;
+        }
+        return true;
+    }
+
+    handleEntityQualifierInput(canonicalKey, prefix, rawKey, valFilter, query) {
+        // Fast local suggestions for instant UX
+        const immediate = this.getImmediateEntitySuggestions(canonicalKey, prefix, rawKey, valFilter);
+        if (immediate && immediate.length > 0) {
+            this.showSuggestions(immediate, query);
+        }
+
+        if (this._qualifierDebounceTimer) {
+            clearTimeout(this._qualifierDebounceTimer);
+        }
+
+        this._qualifierDebounceTimer = setTimeout(async () => {
+            if (this._qualifierAbortController) {
+                this._qualifierAbortController.abort();
+            }
+            this._qualifierAbortController = new AbortController();
+
+            try {
+                const suggestions = await this.fetchQualifierSuggestions(
+                    canonicalKey,
+                    prefix,
+                    rawKey,
+                    valFilter,
+                    query,
+                    this._qualifierAbortController.signal
+                );
+                if (suggestions && this._currentQuery === query) {
+                    this.showSuggestions(suggestions, query);
+                }
+            } catch (e) {
+                if (e.name !== 'AbortError') {
+                    console.error('Error fetching qualifier suggestions:', e);
+                }
+            }
+        }, 150);
+    }
+
+    _parseQualifierValue(canonicalKey, valFilter) {
+        const str = (valFilter || '');
+        const lastCommaIdx = str.lastIndexOf(',');
+
+        let prefixBeforeCurrent = '';
+        let currentRaw = str;
+        const usedValues = new Set();
+
+        if (lastCommaIdx !== -1) {
+            prefixBeforeCurrent = str.substring(0, lastCommaIdx + 1);
+            currentRaw = str.substring(lastCommaIdx + 1);
+
+            const previousTokens = str.substring(0, lastCommaIdx).split(',');
+            for (const token of previousTokens) {
+                const trimmed = token.trim();
+                if (!trimmed) continue;
+                const lower = trimmed.toLowerCase();
+                usedValues.add(lower);
+                usedValues.add(lower.replace(/_/g, ' '));
+                usedValues.add(lower.replace(/ /g, '_'));
+
+                const strippedOp = lower.replace(/^[><=!]{1,3}/, '');
+                if (strippedOp && strippedOp !== lower) {
+                    usedValues.add(strippedOp);
+                }
             }
         }
 
+        if (canonicalKey === 'album' || canonicalKey === 'album_tree') {
+            const cached = this._qualifierCache['album'] || this._qualifierCache[canonicalKey] || [];
+            for (const item of cached) {
+                const idStr = String(item.id || '');
+                const valLower = (item.value || '').toLowerCase();
+                const labelLower = (item.label || '').toLowerCase();
+
+                let matchesUsed = false;
+                if (idStr && usedValues.has(idStr)) matchesUsed = true;
+                if (valLower && (usedValues.has(valLower) || usedValues.has(valLower.replace(/_/g, ' ')))) matchesUsed = true;
+                if (labelLower && usedValues.has(labelLower)) matchesUsed = true;
+
+                if (matchesUsed) {
+                    if (idStr) usedValues.add(idStr);
+                    if (valLower) {
+                        usedValues.add(valLower);
+                        usedValues.add(valLower.replace(/_/g, ' '));
+                        usedValues.add(valLower.replace(/ /g, '_'));
+                    }
+                    if (labelLower) usedValues.add(labelLower);
+                }
+            }
+        } else if (canonicalKey === 'rating') {
+            const ratingEquivs = {
+                's': 'safe', 'safe': 's',
+                'q': 'questionable', 'questionable': 'q',
+                'e': 'explicit', 'explicit': 'e',
+                'g': 'general', 'general': 'g'
+            };
+            const toAdd = [];
+            for (const val of usedValues) {
+                if (ratingEquivs[val]) toAdd.push(ratingEquivs[val]);
+            }
+            for (const val of toAdd) usedValues.add(val);
+        }
+
+        return {
+            prefixBeforeCurrent,
+            currentRaw,
+            usedValues
+        };
+    }
+
+    _isQualifierValueUsed(itemOrVal, usedValues) {
+        if (!usedValues || usedValues.size === 0) return false;
+
+        if (typeof itemOrVal === 'string') {
+            const val = itemOrVal.trim();
+            const lower = val.toLowerCase();
+            if (usedValues.has(lower)) return true;
+            if (usedValues.has(lower.replace(/_/g, ' '))) return true;
+            if (usedValues.has(lower.replace(/ /g, '_'))) return true;
+
+            const strippedOp = lower.replace(/^[><=!]{1,3}/, '');
+            if (strippedOp && usedValues.has(strippedOp)) return true;
+
+            if (val.includes(',')) {
+                const parts = val.split(',');
+                if (parts.some(p => {
+                    const pLower = p.trim().toLowerCase();
+                    return usedValues.has(pLower) || usedValues.has(pLower.replace(/^[><=!]{1,3}/, ''));
+                })) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if (typeof itemOrVal === 'object' && itemOrVal !== null) {
+            const v = (itemOrVal.value || '').toLowerCase();
+            const l = (itemOrVal.label || '').toLowerCase();
+            const id = itemOrVal.id !== undefined && itemOrVal.id !== null ? String(itemOrVal.id) : '';
+
+            if (v && (usedValues.has(v) || usedValues.has(v.replace(/_/g, ' ')))) return true;
+            if (l && (usedValues.has(l) || usedValues.has(l.replace(/ /g, '_')))) return true;
+            if (id && usedValues.has(id)) return true;
+
+            if (itemOrVal.detail) {
+                const m = itemOrVal.detail.match(/ID:?\s*(\d+)/i);
+                if (m && usedValues.has(m[1])) return true;
+            }
+        }
+        return false;
+    }
+
+    _formatQualifierDetail(item) {
+        if (!item) return '';
+        if (item.id !== undefined && item.id !== null) {
+            let idText = `ID ${item.id}`;
+            if (window.i18n && typeof window.i18n.t === 'function') {
+                idText = window.i18n.t('media.relations.parent_id_link', { id: item.id });
+            }
+            if (item.count !== undefined && item.count !== null && item.count !== '') {
+                return `${idText} (${item.count})`;
+            }
+            return idText;
+        }
+        return item.detail || '';
+    }
+
+    getImmediateEntitySuggestions(canonicalKey, prefix, rawKey, valFilter) {
         const qualifierPrefix = `${prefix}${rawKey}:`;
-        return filtered.map(val => ({
-            name: `${qualifierPrefix}${val}`,
+        const { prefixBeforeCurrent, currentRaw, usedValues } = this._parseQualifierValue(canonicalKey, valFilter);
+
+        const OP_REGEX = /^(.*(?:\.\.|>=|<=|>|<|!=|=<|=>))(.*)$/;
+        const opMatch = currentRaw.trim().match(OP_REGEX);
+        const hasOp = !!opMatch;
+        const operator = hasOp ? opMatch[1] : '';
+        const searchTerm = (hasOp ? opMatch[2] : currentRaw).trim().toLowerCase();
+        const basePrefix = `${qualifierPrefix}${prefixBeforeCurrent}${operator}`;
+
+        const cached = this._qualifierCache['album'] || this._qualifierCache[canonicalKey] || [];
+
+        const hasExistingValue = !!prefixBeforeCurrent || usedValues.size > 0;
+        const allowSpecialKeywords = !hasOp && !hasExistingValue;
+        const keywordMatches = [];
+        if (allowSpecialKeywords) {
+            if (!this._isQualifierValueUsed('any', usedValues) && (!searchTerm || 'any'.startsWith(searchTerm))) {
+                keywordMatches.push({
+                    name: `${basePrefix}any`,
+                    qualifier_prefix: qualifierPrefix,
+                    val: `${prefixBeforeCurrent}any`,
+                    is_qualifier: true
+                });
+            }
+            if (!this._isQualifierValueUsed('none', usedValues) && (!searchTerm || 'none'.startsWith(searchTerm))) {
+                keywordMatches.push({
+                    name: `${basePrefix}none`,
+                    qualifier_prefix: qualifierPrefix,
+                    val: `${prefixBeforeCurrent}none`,
+                    is_qualifier: true
+                });
+            }
+        }
+
+        const filteredCache = cached.filter(ex => !this._isQualifierValueUsed(ex, usedValues));
+
+        if (!searchTerm && filteredCache.length > 0) {
+            const cachedList = filteredCache.map(ex => ({
+                name: `${basePrefix}${ex.value}`,
+                qualifier_prefix: qualifierPrefix,
+                val: `${prefixBeforeCurrent}${operator}${ex.value}`,
+                label: ex.label,
+                id: ex.id,
+                count: ex.count,
+                detail: this._formatQualifierDetail(ex),
+                is_qualifier: true
+            }));
+            return [...keywordMatches, ...cachedList];
+        }
+
+        if (searchTerm && filteredCache.length > 0) {
+            const matched = filteredCache.filter(ex => {
+                const vLower = (ex.value || '').toLowerCase();
+                const lLower = (ex.label || '').toLowerCase();
+                const idStr = String(ex.id || '');
+                return vLower.startsWith(searchTerm) || lLower.startsWith(searchTerm) ||
+                       vLower.includes(searchTerm) || lLower.includes(searchTerm) ||
+                       (idStr && idStr === searchTerm);
+            });
+
+            if (matched.length > 0) {
+                const matchedList = matched.map(ex => ({
+                    name: `${basePrefix}${ex.value}`,
+                    qualifier_prefix: qualifierPrefix,
+                    val: `${prefixBeforeCurrent}${operator}${ex.value}`,
+                    label: ex.label,
+                    id: ex.id,
+                    count: ex.count,
+                    detail: this._formatQualifierDetail(ex),
+                    is_qualifier: true
+                }));
+                return [...keywordMatches, ...matchedList];
+            }
+        }
+
+        if (keywordMatches.length > 0) {
+            return keywordMatches;
+        }
+
+        return null;
+    }
+
+    async fetchQualifierSuggestions(canonicalKey, prefix, rawKey, valFilter, query, signal) {
+        const qualifierPrefix = `${prefix}${rawKey}:`;
+        const { prefixBeforeCurrent, currentRaw, usedValues } = this._parseQualifierValue(canonicalKey, valFilter);
+
+        const OP_REGEX = /^(.*(?:\.\.|>=|<=|>|<|!=|=<|=>))(.*)$/;
+        const opMatch = currentRaw.trim().match(OP_REGEX);
+        const hasOp = !!opMatch;
+        const operator = hasOp ? opMatch[1] : '';
+        const searchTerm = (hasOp ? opMatch[2] : currentRaw).trim();
+        const basePrefix = `${qualifierPrefix}${prefixBeforeCurrent}${operator}`;
+
+        if (!this._qualifierCache[canonicalKey] && !this._qualifierCache['album']) {
+            try {
+                const initRes = await fetch(`/api/search/qualifier-autocomplete?qualifier=album&limit=10`, { signal });
+                if (initRes.ok) {
+                    const data = await initRes.json();
+                    this._qualifierCache['album'] = data;
+                    this._qualifierCache['album_tree'] = data;
+                }
+            } catch (e) {
+                if (e.name === 'AbortError') throw e;
+            }
+        }
+        const cached = this._qualifierCache['album'] || this._qualifierCache[canonicalKey] || [];
+        const initialExamples = cached.filter(ex => !this._isQualifierValueUsed(ex, usedValues));
+
+        const hasExistingValue = !!prefixBeforeCurrent || usedValues.size > 0;
+        const allowSpecialKeywords = !hasOp && !hasExistingValue;
+
+        const buildFallback = (targetBase) => {
+            const list = [];
+            if (allowSpecialKeywords) {
+                if (!this._isQualifierValueUsed('any', usedValues)) {
+                    list.push({
+                        name: `${targetBase}any`,
+                        qualifier_prefix: qualifierPrefix,
+                        val: `${prefixBeforeCurrent}${operator}any`,
+                        is_qualifier: true
+                    });
+                }
+                if (!this._isQualifierValueUsed('none', usedValues)) {
+                    list.push({
+                        name: `${targetBase}none`,
+                        qualifier_prefix: qualifierPrefix,
+                        val: `${prefixBeforeCurrent}${operator}none`,
+                        is_qualifier: true
+                    });
+                }
+            }
+            for (const ex of initialExamples) {
+                list.push({
+                    name: `${targetBase}${ex.value}`,
+                    qualifier_prefix: qualifierPrefix,
+                    val: `${prefixBeforeCurrent}${operator}${ex.value}`,
+                    label: ex.label,
+                    id: ex.id,
+                    count: ex.count,
+                    detail: this._formatQualifierDetail(ex),
+                    is_qualifier: true
+                });
+            }
+            return list;
+        };
+
+        if (!searchTerm) {
+            return buildFallback(basePrefix);
+        }
+
+        let apiResults = [];
+        try {
+            let url = `/api/search/qualifier-autocomplete?qualifier=${encodeURIComponent(canonicalKey)}&q=${encodeURIComponent(searchTerm)}&limit=10`;
+            if (usedValues.size > 0) {
+                const excludeParam = Array.from(usedValues).join(',');
+                url += `&exclude=${encodeURIComponent(excludeParam)}`;
+            }
+            const res = await fetch(url, { signal });
+            if (res.ok) {
+                apiResults = await res.json();
+            }
+        } catch (e) {
+            if (e.name === 'AbortError') throw e;
+        }
+
+        const keywordMatches = [];
+        if (allowSpecialKeywords) {
+            const sLower = searchTerm.toLowerCase();
+            if (!this._isQualifierValueUsed('any', usedValues) && 'any'.startsWith(sLower)) {
+                keywordMatches.push({
+                    name: `${basePrefix}any`,
+                    qualifier_prefix: qualifierPrefix,
+                    val: `${prefixBeforeCurrent}${operator}any`,
+                    is_qualifier: true
+                });
+            }
+            if (!this._isQualifierValueUsed('none', usedValues) && 'none'.startsWith(sLower)) {
+                keywordMatches.push({
+                    name: `${basePrefix}none`,
+                    qualifier_prefix: qualifierPrefix,
+                    val: `${prefixBeforeCurrent}${operator}none`,
+                    is_qualifier: true
+                });
+            }
+        }
+
+        const filteredApiResults = apiResults.filter(item => !this._isQualifierValueUsed(item, usedValues));
+
+        if (filteredApiResults.length > 0 || keywordMatches.length > 0) {
+            const mapped = filteredApiResults.map(item => ({
+                name: `${basePrefix}${item.value}`,
+                qualifier_prefix: qualifierPrefix,
+                val: `${prefixBeforeCurrent}${operator}${item.value}`,
+                label: item.label,
+                id: item.id,
+                count: item.count,
+                detail: this._formatQualifierDetail(item),
+                is_qualifier: true
+            }));
+            return [...keywordMatches, ...mapped];
+        }
+
+        // If no results are found, show the initial examples without broken text concatenation
+        return buildFallback(basePrefix);
+    }
+
+    getStaticQualifierSuggestions(canonicalKey, prefix, rawKey, valFilter, query) {
+        const qualifierPrefix = `${prefix}${rawKey}:`;
+        const { prefixBeforeCurrent, currentRaw, usedValues } = this._parseQualifierValue(canonicalKey, valFilter);
+        const rawItems = TagAutocomplete.QUALIFIERS[canonicalKey] || [];
+        const hasExistingValue = !!prefixBeforeCurrent || usedValues.size > 0;
+
+        const items = rawItems.filter(val => {
+            if (prefixBeforeCurrent && val.includes(',')) return false;
+            if (hasExistingValue && (val === 'any' || val === 'none')) return false;
+            return !this._isQualifierValueUsed(val, usedValues);
+        });
+
+        const valTrimmed = currentRaw.trim();
+        const valLower = valTrimmed.toLowerCase();
+        const basePrefix = `${qualifierPrefix}${prefixBeforeCurrent}`;
+
+        const buildList = (list, op = '') => list.map(val => ({
+            name: `${basePrefix}${op}${val}`,
             qualifier_prefix: qualifierPrefix,
-            val: val,
+            val: `${prefixBeforeCurrent}${op}${val}`,
             is_qualifier: true
         }));
+
+        if (!valLower) {
+            return buildList(items);
+        }
+
+        let matched = items.filter(val => {
+            const itemLower = val.toLowerCase();
+            return itemLower.startsWith(valLower) || itemLower.includes(valLower);
+        });
+
+        if (matched.length > 0) {
+            matched.sort((a, b) => {
+                const aVal = a.toLowerCase();
+                const bVal = b.toLowerCase();
+                const aStarts = aVal.startsWith(valLower) ? 0 : 1;
+                const bStarts = bVal.startsWith(valLower) ? 0 : 1;
+                if (aStarts !== bStarts) return aStarts - bStarts;
+                return 0;
+            });
+            return buildList(matched);
+        }
+
+        const OP_REGEX = /^(.*(?:\.\.|>=|<=|>|<|!=|=<|=>))(.*)$/;
+        const opMatch = valTrimmed.match(OP_REGEX);
+        if (opMatch) {
+            const operator = opMatch[1];
+            const searchTerm = opMatch[2].toLowerCase();
+
+            if (searchTerm) {
+                const opMatched = items.filter(val => {
+                    const stripped = val.replace(/^[><=!]{1,3}/, '').toLowerCase();
+                    return stripped.startsWith(searchTerm) || stripped.includes(searchTerm);
+                });
+                if (opMatched.length > 0) {
+                    return opMatched.map(val => {
+                        const cleanVal = val.replace(/^[><=!]{1,3}/, '');
+                        return {
+                            name: `${basePrefix}${operator}${cleanVal}`,
+                            qualifier_prefix: qualifierPrefix,
+                            val: `${prefixBeforeCurrent}${operator}${cleanVal}`,
+                            is_qualifier: true
+                        };
+                    });
+                }
+            }
+        }
+
+        // No match -- show the available items for this qualifier (excluding already used ones)
+        return buildList(items);
+    }
+
+    getQualifierSuggestions(query) {
+        if (!query) return null;
+        const match = query.match(/^([~-]?)([a-zA-Z0-9_]+):(.*)$/);
+        if (!match) return null;
+        const prefix = match[1] || '';
+        const rawKey = match[2].toLowerCase();
+        const valFilter = match[3];
+        const canonicalKey = TagAutocomplete.QUALIFIERS[rawKey] ? rawKey : TagAutocomplete.QUALIFIER_ALIASES[rawKey];
+        if (!canonicalKey || !TagAutocomplete.QUALIFIERS[canonicalKey]) return null;
+        if (TagAutocomplete.ENTITY_QUALIFIERS && TagAutocomplete.ENTITY_QUALIFIERS.has(canonicalKey)) {
+            return this.getImmediateEntitySuggestions(canonicalKey, prefix, rawKey, valFilter) || [];
+        }
+        return this.getStaticQualifierSuggestions(canonicalKey, prefix, rawKey, valFilter, query);
     }
 
     destroy() {
+        if (this._qualifierDebounceTimer) {
+            clearTimeout(this._qualifierDebounceTimer);
+            this._qualifierDebounceTimer = null;
+        }
+        if (this._qualifierAbortController) {
+            this._qualifierAbortController.abort();
+            this._qualifierAbortController = null;
+        }
         if (this.onInputBound) {
             this.input.removeEventListener('input', this.onInputBound);
         }
@@ -685,11 +1138,13 @@ class TagAutocomplete {
     }
 }
 
+TagAutocomplete.ENTITY_QUALIFIERS = new Set(['album', 'album_tree']);
+
 TagAutocomplete.QUALIFIERS = {
     child: ['any', 'none', '123', '>100', '1..100'],
     parent: ['none', 'any', '100', '>100', '1..100'],
-    album: ['any', 'none', 'favorites', '123'],
-    album_tree: ['artbook', '1'],
+    album: ['any', 'none'],
+    album_tree: ['any', 'none'],
     rating: ['s', 'q', 'e', 'safe', 'questionable', 'explicit', 's,q'],
     tagcount: ['>20', '>=5', '<10', '<=15', '0', '1..10', '!=0'],
     gentags: ['>10', '>=4', '<8', '0', '1..5'],

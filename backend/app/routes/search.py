@@ -5,11 +5,12 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
+from sqlalchemy import case, desc, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import settings
 from ..database import get_db
-from ..models import Media
+from ..models import Album, Media
 from ..schemas import MediaResponse
 from ..utils.cache import cache_response
 from ..utils.logger import logger
@@ -165,3 +166,99 @@ async def get_syntax_guide(lang: str = Query("en", description="Language code fo
     resolved_lang = _resolve_syntax_guide_lang(lang)
     rendered_html = _render_syntax_guide(resolved_lang)
     return SyntaxGuideResponse(html=rendered_html, lang=resolved_lang)
+
+@router.get("/qualifier-autocomplete")
+@cache_response(expire=3600, key_prefix="qualifier_autocomplete")
+async def qualifier_autocomplete(
+    request: Request,
+    qualifier: str = Query(..., description="Qualifier name"),
+    q: str = Query("", description="Search term for qualifier value"),
+    exclude: Optional[str] = Query(None, description="Comma-separated values or IDs to exclude"),
+    limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db)
+):
+    """Dynamic autocomplete suggestions for search qualifiers."""
+    canonical = (qualifier or "").strip().lower()
+    alias_map = {
+        'pool': 'album',
+        'pool_tree': 'album_tree'
+    }
+    canonical = alias_map.get(canonical, canonical)
+    q_clean = (q or "").strip()
+
+    if canonical in ('album', 'album_tree'):
+        query = db.query(Album)
+
+        if exclude:
+            exclude_tokens = [x.strip() for x in exclude.split(',') if x.strip()]
+            exclude_ids = []
+            exclude_names = []
+            for tok in exclude_tokens:
+                if tok.isdigit():
+                    exclude_ids.append(int(tok))
+                else:
+                    exclude_names.append(tok.replace('_', ' ').lower())
+            if exclude_ids:
+                query = query.filter(Album.id.notin_(exclude_ids))
+            if exclude_names:
+                for en in exclude_names:
+                    query = query.filter(func.lower(Album.name) != en)
+
+        if q_clean:
+            clean_text = q_clean.replace('_', ' ')
+            q_pattern = f"%{clean_text}%"
+            if q_clean.isdigit():
+                query = query.filter(or_(Album.id == int(q_clean), Album.name.ilike(q_pattern)))
+                priority = case(
+                    (Album.id == int(q_clean), 1),
+                    (func.lower(Album.name) == clean_text.lower(), 2),
+                    (Album.name.ilike(f"{clean_text}%"), 3),
+                    else_=4
+                )
+            else:
+                query = query.filter(Album.name.ilike(q_pattern))
+                priority = case(
+                    (func.lower(Album.name) == clean_text.lower(), 1),
+                    (Album.name.ilike(f"{clean_text}%"), 2),
+                    else_=3
+                )
+            albums = query.order_by(
+                priority,
+                desc(Album.cached_media_count),
+                func.length(Album.name),
+                Album.name
+            ).limit(limit).all()
+        else:
+            albums = query.order_by(
+                desc(Album.cached_media_count),
+                Album.id
+            ).limit(min(limit, 5)).all()
+
+        results = []
+        seen = set()
+        for a in albums:
+            name_val = a.name.replace(' ', '_')
+            if name_val.lower() in seen:
+                continue
+            seen.add(name_val.lower())
+            count = a.cached_media_count or 0
+            detail_str = f"ID {a.id} ({count})"
+            results.append({
+                "value": name_val,
+                "label": a.name,
+                "detail": detail_str,
+                "id": a.id,
+                "count": count
+            })
+        return results
+
+    if canonical in ('id', 'child', 'parent') and not q_clean:
+        sample = db.query(Media.id).order_by(desc(Media.id)).first()
+        if sample:
+            return [{
+                "value": str(sample[0]),
+                "label": f"Post #{sample[0]}",
+                "detail": "Latest ID"
+            }]
+
+    return []
