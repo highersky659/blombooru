@@ -4,7 +4,7 @@
 > **Stability notice:** The internal API has no stability guarantees and may change at any time without prior notice. Its intended use case is internal tooling. The docs are also not guaranteed to be up to date with the latest changes in the API.
 
 > [!NOTE]
-> Last updated: `September 8, 2026`  
+> Last updated: `September 27, 2026`  
 > Update date for the docs can be found in the individual doc files.
 
 
@@ -206,6 +206,6 @@ All error responses follow the FastAPI default format:
 | **Admin: Backup & Import** | Tag/media export and full backup import | [Admin/Backup](/docs/Internal%20API/API/Admin/Backup.md) |
 | **Admin: Custom Themes** | Custom theme CRUD and import/export | [Admin/Custom Themes](/docs/Internal%20API/API/Admin/Custom%20Themes.md) |
 | **Admin: Media** | Untracked file scanning, stats, and thumbnail management | [Admin/Media](/docs/Internal%20API/API/Admin/Media.md) |
-| **Admin: Settings** | App configuration, instance info, themes, languages | [Admin/Settings](/docs/Internal%20API/API/Admin/Settings.md) |
+| **Admin: Settings** | App configuration, cache management, themes, languages | [Admin/Settings](/docs/Internal%20API/API/Admin/Settings.md) |
 | **Admin: Shared Tags** | Shared tag database sync and status | [Admin/Shared Tags](/docs/Internal%20API/API/Admin/Shared%20Tags.md) |
 | **Admin: Tags Management** | Tag CSV imports, bulk operations | [Admin/Tags](/docs/Internal%20API/API/Admin/Tags.md) |
