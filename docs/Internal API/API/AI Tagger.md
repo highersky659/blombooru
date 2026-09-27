@@ -1,7 +1,7 @@
 ## AI Tagger
 
 > [!NOTE]
-> Last updated: `May 31, 2026`
+> Last updated: `September 27, 2026`
 
 **Base path:** `/api/ai-tagger`
 
@@ -9,13 +9,14 @@ Uses the WDv3 model family to suggest tags for images. The `GET /api/ai-tagger/s
 
 ### Available models
 
-| Model | Approx. size |
-|---|---|
-| `wd-eva02-large-tagger-v3` (default) | ~850 MB |
-| `wd-vit-tagger-v3` | ~350 MB |
-| `wd-swinv2-tagger-v3` | ~450 MB |
-| `wd-convnext-tagger-v3` | ~350 MB |
-| `wd-vit-large-tagger-v3` | ~1200 MB |
+| Model | Approx. size | Speed Rank (CPU) | Accuracy Rank | Optimal Batch Size (CPU) |
+|---|---|---|---|---|
+| `pixai-tagger-v1.0` | ~935 MB | 6 (Slowest) | 1 (Most accurate) | 1 |
+| `wd-eva02-large-tagger-v3` (default) | ~850 MB | 4 | 2 | 2 |
+| `wd-vit-large-tagger-v3` | ~1200 MB | 5 | 3 | 5 |
+| `wd-swinv2-tagger-v3` | ~450 MB | 3 | 4 | 15 |
+| `wd-convnext-tagger-v3` | ~350 MB | 2 | 5 | 1 |
+| `wd-vit-tagger-v3` | ~350 MB | 1 (Fastest) | 6 (Least accurate) | 10 |
 
 ---
 
@@ -39,6 +40,41 @@ GET /api/ai-tagger/status
 ```
 
 `available: false` means the optional dependencies are not installed.
+
+---
+
+### Get available models
+
+Requires `require_admin_mode`. Returns the list of models sorted by `accuracy_rank` ascending.
+
+```
+GET /api/ai-tagger/models
+```
+
+**Response:**
+
+```json
+[
+  {
+    "name": "pixai-tagger-v1.0",
+    "repo_id": "A1yCE/pixai-tagger-v1.0-onnx-fp16",
+    "is_downloaded": true,
+    "is_loaded": false,
+    "is_downloading": false,
+    "speed_rank": 6,
+    "accuracy_rank": 1
+  },
+  {
+    "name": "wd-eva02-large-tagger-v3",
+    "repo_id": "SmilingWolf/wd-eva02-large-tagger-v3",
+    "is_downloaded": true,
+    "is_loaded": false,
+    "is_downloading": false,
+    "speed_rank": 4,
+    "accuracy_rank": 2
+  }
+]
+```
 
 ---
 
@@ -84,7 +120,7 @@ GET /api/ai-tagger/model-status/{model_name}
   "is_downloaded": true,
   "is_loaded": false,
   "download_size_mb": 850,
-  "optimal_batch_size": 8
+  "optimal_batch_size": 2
 }
 ```
 
@@ -98,7 +134,7 @@ Downloads and loads the specified model from HuggingFace Hub (blocking).
 POST /api/ai-tagger/download/{model_name}
 ```
 
-**Response:** `{ "success": true, "model": "...", "optimal_batch_size": 8, "message": "..." }`
+**Response:** `{ "success": true, "model": "...", "optimal_batch_size": 2, "message": "..." }`
 
 ---
 
