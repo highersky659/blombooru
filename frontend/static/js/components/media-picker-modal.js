@@ -154,7 +154,10 @@ class MediaPickerModal {
 
         // Tag autocomplete
         if (typeof TagAutocomplete !== 'undefined') {
-            new TagAutocomplete(searchInput, { multipleValues: true });
+            new TagAutocomplete(searchInput, {
+                multipleValues: true,
+                enableQualifiers: true
+            });
         }
 
         // ID input (always visible now)

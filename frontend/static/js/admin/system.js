@@ -441,6 +441,7 @@ class AdminSystem {
             if (typeof TagAutocomplete !== 'undefined') {
                 const autocomplete = new TagAutocomplete(tagInput, {
                     multipleValues: true,
+                    enableQualifiers: true,
                     containerClasses: 'max-h-40 overflow-y-auto w-full bg border border-primary shadow-lg z-10'
                 });
                 instance.autocomplete = autocomplete;
