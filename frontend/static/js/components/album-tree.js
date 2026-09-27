@@ -207,7 +207,7 @@ class AlbumTree {
         const isSelected = this.options.isSelectable && this.options.selectedIds.has(album.id);
         const parentPath = album.parents.map(p => p.name).join(' > ');
         const hasChildren = album.children && album.children.length > 0;
-        const indentPx = isFiltered ? 0 : album.depth * 20;
+        const indentPx = isFiltered ? 0 : album.depth * 0.5;
 
         const folderIcon = hasChildren
             ? window.Icons.folderParent({ size: 14, class: 'flex-shrink-0' })
@@ -236,9 +236,9 @@ class AlbumTree {
         const hiddenClass = isHidden ? ' hidden' : '';
 
         return `
-            <div class="album-picker-item flex items-center gap-2 border-b py-2 pr-2.5 transition-colors ${selectClasses}${stateClasses}${hiddenClass}"
+            <div class="album-picker-item flex items-center gap-2 border-b py-1 pr-1.5 transition-colors ${selectClasses}${stateClasses}${hiddenClass}"
                  data-album-id="${album.id}"
-                 style="padding-left: ${10 + indentPx}px;">
+                 style="padding-left: ${0.5 + indentPx}rem;">
                 <span class="album-picker-item__icon shrink-0 transition-colors ${isSelected ? 'text-primary' : 'text-secondary'}">${folderIcon}</span>
                 <div class="flex-1 min-w-0">
                     <div class="text-xs font-medium truncate">${album.name}</div>
