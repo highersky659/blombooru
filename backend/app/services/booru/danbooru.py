@@ -1,4 +1,5 @@
 import re
+from threading import Lock
 import time
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
@@ -34,18 +35,96 @@ class DanbooruClient(BooruClient):
     POST_URL_PATTERN = re.compile(r"/posts/(\d+)")
     MAX_RETRIES = 2
     RETRY_DELAY = 1.0  # seconds
+    PROFILE_RETRY_INTERVAL = 60.0 # seconds
 
-    def __init__(self, base_url: str, api_key: Optional[str] = None, username: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: Optional[str] = None,
+        username: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.username = username
+        self.user_id = int(user_id) if user_id is not None else None
+        self._profile_lock = Lock()
+        self._last_profile_attempt: float = 0.0
+        self._permanent_auth_failure: bool = False
+
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Blombooru/1.0 (booru-import)",
+            "User-Agent": self._format_user_agent(),
             "Accept": "application/json",
         })
         if api_key and username:
             self.session.params = {"api_key": api_key, "login": username}
+
+    def _format_user_agent(self) -> str:
+        base = "Blombooru/1.0 (booru-import)"
+        if self.user_id is not None:
+            return f"{base}; user #{self.user_id}"
+        return base
+
+    def ensure_user_id(self) -> Optional[int]:
+        """
+        Lazily fetch the authenticated account ID from /profile.json if not already loaded.
+        Thread-safe via per-instance lock, executed outside of any global cache locks.
+        Retries transient errors after PROFILE_RETRY_INTERVAL; stops retrying on permanent 401/403.
+        """
+        if self.user_id is not None:
+            return self.user_id
+
+        if not (self.api_key and self.username):
+            return None
+
+        if self._permanent_auth_failure:
+            return None
+
+        now = time.time()
+        if now - self._last_profile_attempt < self.PROFILE_RETRY_INTERVAL:
+            return None
+
+        with self._profile_lock:
+            if self.user_id is not None:
+                return self.user_id
+
+            if self._permanent_auth_failure:
+                return None
+
+            now = time.time()
+            if now - self._last_profile_attempt < self.PROFILE_RETRY_INTERVAL:
+                return None
+
+            self._last_profile_attempt = now
+
+            try:
+                url = f"{self.base_url}/profile.json"
+                resp = self.session.get(url, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict) and data.get("id") is not None:
+                        try:
+                            self.user_id = int(data["id"])
+                            self.session.headers["User-Agent"] = self._format_user_agent()
+                            return self.user_id
+                        except (ValueError, TypeError):
+                            logger.warning(
+                                f"Unexpected non-integer ID in Danbooru profile: {data.get('id')}"
+                            )
+                elif resp.status_code in (401, 403):
+                    self._permanent_auth_failure = True
+                    logger.warning(
+                        f"Danbooru authentication failed (HTTP {resp.status_code}) for user {self.username} on {self.base_url}"
+                    )
+                else:
+                    logger.warning(
+                        f"Danbooru profile check returned HTTP {resp.status_code} for user {self.username} on {self.base_url}"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not fetch Danbooru account ID from {self.base_url}: {e}")
+
+        return None
 
     @classmethod
     def can_handle_url(cls, url: str) -> bool:
@@ -183,6 +262,7 @@ class DanbooruClient(BooruClient):
         return "\n\n".join(parts) if parts else None
 
     def fetch_post(self, post_id: int) -> BooruPost:
+        self.ensure_user_id()
         url = f"{self.base_url}/posts/{post_id}.json"
         data = self._request_with_retry(url)
 
@@ -213,6 +293,7 @@ class DanbooruClient(BooruClient):
 
     def search_posts(self, tags: str = "", page: int = 1, limit: int = 20) -> List[BooruPost]:
         """Search posts by tags. ready for future viewer feature."""
+        self.ensure_user_id()
         url = f"{self.base_url}/posts.json"
         params = {"tags": tags, "page": page, "limit": min(limit, 200)}
 

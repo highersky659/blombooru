@@ -1,6 +1,7 @@
 from .base import BooruClient
 from .danbooru import DanbooruClient
-from .factory import get_client_for_url
+from .factory import (clear_client_cache, get_booru_config_for_url,
+                      get_client_for_url, get_user_agent_for_url)
 from .gelbooru import GelbooruClient
 from .types import BooruPost, BooruTag
 
@@ -11,4 +12,7 @@ __all__ = [
     "DanbooruClient",
     "GelbooruClient",
     "get_client_for_url",
+    "get_booru_config_for_url",
+    "get_user_agent_for_url",
+    "clear_client_cache",
 ]
