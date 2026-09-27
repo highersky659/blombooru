@@ -18,8 +18,8 @@ from ..database import get_db
 from ..models import (Album, Media, Tag, User, blombooru_album_media,
                       blombooru_media_tags)
 from ..schemas import (AlbumListResponse, BatchMediaRequest, BatchMetadataRequest,
-                       BulkTagUpdateRequest, BulkTagUpdateResponse, MediaCreate,
-                       MediaResponse, MediaUpdate, RatingEnum, ShareSettingsUpdate)
+                       BulkTagUpdateRequest, BulkTagUpdateResponse, MediaResponse,
+                       MediaUpdate, RatingEnum, ShareSettingsUpdate)
 from ..utils.album_utils import (get_bulk_album_thumbnails, get_flattened_media_ids,
                                 handle_media_deleted, handle_media_rating_changed,
                                 set_media_albums)
@@ -29,7 +29,10 @@ from ..utils.format_registry import format_registry
 from ..utils.logger import logger
 from ..utils.media_helpers import (create_stripped_media_cache,
                                    delete_media_cache, extract_media_metadata,
-                                   get_unique_filename, sanitize_filename,
+                                   get_effective_media_path,
+                                   get_unique_filename,
+                                   rebuild_stripped_cache_if_needed,
+                                   sanitize_filename,
                                    serve_media_file)
 from ..utils.media_processor import calculate_file_hash, process_media_file
 from ..utils.media_sort import apply_media_sort
@@ -68,6 +71,7 @@ class PostUpdateRequest(BaseModel):
 async def update_from_source(
     media_id: int,
     req: PostUpdateRequest,
+    background_tasks: BackgroundTasks = None,
     current_user: User = Depends(require_admin_mode),
     db: Session = Depends(get_db),
 ):
@@ -100,6 +104,8 @@ async def update_from_source(
         affected_tag_ids = list(set(old_tag_ids + new_tag_ids))
 
     rating_changed = False
+    filename_changed = False
+    file_updated = False
     if req.update_rating and req.rating:
         if media.rating != req.rating:
             media.rating = req.rating
@@ -114,6 +120,7 @@ async def update_from_source(
     if req.update_filename and req.filename:
         new_filename = sanitize_filename(req.filename)
         if new_filename and new_filename != media.filename:
+            filename_changed = True
             old_path = settings.BASE_DIR / media.path
             new_unique = get_unique_filename(settings.ORIGINAL_DIR, new_filename)
             new_path = settings.ORIGINAL_DIR / new_unique
@@ -128,7 +135,7 @@ async def update_from_source(
                 if media.transcoded_path:
                     old_transc_path = settings.BASE_DIR / media.transcoded_path
                     if old_transc_path.exists():
-                        delete_media_cache(old_transc_path)
+                        delete_media_cache(media)
                         new_transc_path.parent.mkdir(parents=True, exist_ok=True)
                         old_transc_path.rename(new_transc_path)
                         media.transcoded_path = str(new_transc_path.relative_to(settings.BASE_DIR))
@@ -142,7 +149,7 @@ async def update_from_source(
                 if media.transcoded_path:
                     old_transc_path = settings.BASE_DIR / media.transcoded_path
                     if old_transc_path.exists():
-                        delete_media_cache(old_transc_path)
+                        delete_media_cache(media)
                         old_transc_path.unlink(missing_ok=True)
                     media.transcoded_path = None
 
@@ -192,12 +199,11 @@ async def update_from_source(
                 raise HTTPException(status_code=409, detail=f"Media already exists (duplicate of {duplicate.filename})")
 
             old_file = settings.BASE_DIR / media.path
-            delete_media_cache(old_file)
+            delete_media_cache(media)
             old_file.unlink(missing_ok=True)
 
             if media.transcoded_path:
                 old_transc = settings.BASE_DIR / media.transcoded_path
-                delete_media_cache(old_transc)
                 old_transc.unlink(missing_ok=True)
                 media.transcoded_path = None
 
@@ -225,6 +231,7 @@ async def update_from_source(
             media.width = new_meta["width"]
             media.height = new_meta["height"]
             media.duration = new_meta["duration"]
+            file_updated = True
 
         except HTTPException:
             raise
@@ -248,6 +255,9 @@ async def update_from_source(
     invalidate_media_item_cache(media_id)
     invalidate_tag_cache()
 
+    if file_updated or filename_changed:
+        await rebuild_stripped_cache_if_needed(media, background_tasks)
+
     return MediaResponse.model_validate(media)
 
 @router.post("/{media_id}/update-file-finalize", response_model=MediaResponse)
@@ -255,6 +265,7 @@ async def update_file_finalize(
     media_id: int,
     upload_id: str = Form(...),
     update_filename: bool = Form(False),
+    background_tasks: BackgroundTasks = None,
     current_user: User = Depends(require_admin_mode),
     db: Session = Depends(get_db),
 ):
@@ -333,12 +344,11 @@ async def update_file_finalize(
         old_file = settings.BASE_DIR / media.path
 
         if old_file.exists():
-            delete_media_cache(old_file)
+            delete_media_cache(media)
             old_file.unlink(missing_ok=True)
 
         if media.transcoded_path:
             old_transc = settings.BASE_DIR / media.transcoded_path
-            delete_media_cache(old_transc)
             old_transc.unlink(missing_ok=True)
             media.transcoded_path = None
 
@@ -374,6 +384,8 @@ async def update_file_finalize(
         db.refresh(media)
         invalidate_media_cache()
         invalidate_media_item_cache(media_id)
+
+        await rebuild_stripped_cache_if_needed(media, background_tasks)
 
         return MediaResponse.model_validate(media)
 
@@ -1430,12 +1442,11 @@ async def delete_media(
     tag_ids = [tag.id for tag in media.tags]
     
     file_path = settings.BASE_DIR / media.path
-    delete_media_cache(file_path)
+    delete_media_cache(media)
     file_path.unlink(missing_ok=True)
 
     if media.transcoded_path:
         transcoded_file_path = settings.BASE_DIR / media.transcoded_path
-        delete_media_cache(transcoded_file_path)
         transcoded_file_path.unlink(missing_ok=True)
     
     if media.thumbnail_path:
@@ -1476,11 +1487,12 @@ async def share_media(
         media.share_uuid = str(uuid.uuid4())
         media.is_shared = True
         
-        # Trigger background stripping
-        effective_path = (settings.BASE_DIR / media.transcoded_path) if media.transcoded_path else (settings.BASE_DIR / media.path)
-        effective_mime = format_registry.get_mime_type(effective_path.name, default=media.mime_type)
-        if effective_mime and effective_mime.startswith('image/'):
-            background_tasks.add_task(create_stripped_media_cache, effective_path, effective_mime)
+        # Trigger background stripping if AI metadata not shared
+        if not getattr(media, "share_ai_metadata", False):
+            effective_path = get_effective_media_path(media)
+            effective_mime = format_registry.get_mime_type(effective_path.name, default=media.mime_type)
+            if effective_mime and effective_mime.startswith('image/'):
+                background_tasks.add_task(create_stripped_media_cache, media, effective_mime)
     
     db.commit()
     invalidate_media_item_cache(media_id)
@@ -1508,8 +1520,7 @@ async def unshare_media(
     
     # Cleanup cache
     try:
-        file_path = settings.BASE_DIR / media.path
-        delete_media_cache(file_path)
+        delete_media_cache(media)
     except Exception as e:
         logger.error(f"Failed to cleanup cache for unshared media: {e}")
     
@@ -1519,6 +1530,7 @@ async def unshare_media(
 async def update_share_settings(
     media_id: int,
     updates: ShareSettingsUpdate,
+    background_tasks: BackgroundTasks = None,
     current_user: User = Depends(require_admin_mode),
     db: Session = Depends(get_db)
 ):
@@ -1531,7 +1543,12 @@ async def update_share_settings(
         raise HTTPException(status_code=400, detail="Media is not shared")
     
     if updates.share_ai_metadata is not None:
-        media.share_ai_metadata = updates.share_ai_metadata
+        changed = updates.share_ai_metadata != media.share_ai_metadata
+        if changed:
+            media.share_ai_metadata = updates.share_ai_metadata
+            delete_media_cache(media)
+        if not media.share_ai_metadata:
+            await rebuild_stripped_cache_if_needed(media, background_tasks)
         
     if updates.share_language is not None:
         if updates.share_language == "default" or updates.share_language == "":

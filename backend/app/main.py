@@ -126,6 +126,16 @@ async def lifespan(app: FastAPI):
             async def periodic_dead_cache_cleanup():
                 from .database import SessionLocal
                 from .utils.media_helpers import cleanup_dead_media_cache
+                try:
+                    if SessionLocal is not None:
+                        db = SessionLocal()
+                        try:
+                            await asyncio.to_thread(cleanup_dead_media_cache, db)
+                        finally:
+                            db.close()
+                except Exception as e:
+                    logger.error(f"Startup dead cache cleanup error: {e}")
+
                 while True:
                     await asyncio.sleep(6 * 3600)  # Every 6 hours
                     try:
@@ -133,7 +143,7 @@ async def lifespan(app: FastAPI):
                             continue
                         db = SessionLocal()
                         try:
-                            cleanup_dead_media_cache(db)
+                            await asyncio.to_thread(cleanup_dead_media_cache, db)
                         finally:
                             db.close()
                     except asyncio.CancelledError:

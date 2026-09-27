@@ -1,14 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
-from ...config import APP_VERSION
-
-from ...auth import get_current_admin_user, require_admin_mode
+from ...auth import require_admin_mode
 from ...config import settings
+from ...database import get_db
 from ...models import User
 from ...schemas import SettingsUpdate
 from ...themes import theme_registry
 from ...utils.cache import invalidate_media_cache
-from ...utils.logger import logger
 
 router = APIRouter()
 
@@ -117,3 +116,19 @@ async def get_translations(lang: str = None):
     from ...translations import translation_helper
     target_lang = lang or settings.CURRENT_LANGUAGE
     return translation_helper.get_translations(target_lang)
+
+@router.get("/cache-stats")
+async def get_cache_stats(current_user: User = Depends(require_admin_mode)):
+    """Get stripped-media cache statistics (file count and total size)."""
+    from ...utils.media_helpers import get_stripped_cache_stats
+    return get_stripped_cache_stats()
+
+@router.post("/clear-cache")
+async def clear_cache(
+    current_user: User = Depends(require_admin_mode),
+    db: Session = Depends(get_db)
+):
+    """Manually clear dead stripped-media cache files."""
+    from ...utils.media_helpers import cleanup_dead_media_cache
+    deleted = cleanup_dead_media_cache(db)
+    return {"deleted": deleted}
