@@ -45,6 +45,7 @@ class BlombooruTestSandboxMixin:
         self.thumbnail_dir = self.media_dir / "thumbnails"
         self.transcoded_dir = self.media_dir / "transcoded"
         self.cache_dir = self.media_dir / "cache"
+        self.stripped_cache_dir = self.cache_dir / "stripped"
         self.chunks_dir = self.cache_dir / "media-chunks"
         self.data_dir = self.tmp_path / "data"
         self.custom_themes_dir = self.data_dir / "custom_themes"
@@ -53,6 +54,7 @@ class BlombooruTestSandboxMixin:
         self.thumbnail_dir.mkdir(parents=True, exist_ok=True)
         self.transcoded_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.stripped_cache_dir.mkdir(parents=True, exist_ok=True)
         self.chunks_dir.mkdir(parents=True, exist_ok=True)
         self.custom_themes_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,6 +71,7 @@ class BlombooruTestSandboxMixin:
         self.old_thumbnail_dir = settings.THUMBNAIL_DIR
         self.old_transcoded_dir = settings.TRANSCODED_DIR
         self.old_cache_dir = settings.CACHE_DIR
+        self.old_stripped_cache_dir = getattr(settings, "STRIPPED_CACHE_DIR", None)
         self.old_data_dir = settings.DATA_DIR
         self.old_settings_file = settings.SETTINGS_FILE
         self.old_settings_dict = dict(settings.settings)
@@ -80,6 +83,7 @@ class BlombooruTestSandboxMixin:
         settings.THUMBNAIL_DIR = self.thumbnail_dir
         settings.TRANSCODED_DIR = self.transcoded_dir
         settings.CACHE_DIR = self.cache_dir
+        settings.STRIPPED_CACHE_DIR = self.stripped_cache_dir
         settings.DATA_DIR = self.data_dir
         settings.SETTINGS_FILE = self.data_dir / "settings.json"
         settings.file_settings = {}
@@ -103,6 +107,8 @@ class BlombooruTestSandboxMixin:
         settings.THUMBNAIL_DIR = self.old_thumbnail_dir
         settings.TRANSCODED_DIR = self.old_transcoded_dir
         settings.CACHE_DIR = self.old_cache_dir
+        if self.old_stripped_cache_dir is not None:
+            settings.STRIPPED_CACHE_DIR = self.old_stripped_cache_dir
         settings.DATA_DIR = self.old_data_dir
         settings.SETTINGS_FILE = self.old_settings_file
         settings.file_settings = self.old_file_settings_dict

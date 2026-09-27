@@ -19,6 +19,7 @@ class Settings:
         self.THUMBNAIL_DIR = self.MEDIA_DIR / "thumbnails"
         self.TRANSCODED_DIR = self.MEDIA_DIR / "transcoded"
         self.CACHE_DIR = self.MEDIA_DIR / "cache"
+        self.STRIPPED_CACHE_DIR = self.CACHE_DIR / "stripped"
         self.DATA_DIR = self.BASE_DIR / "data"
         self.MODELS_DIR = self.DATA_DIR / "models"
         self.SETTINGS_FILE = self.DATA_DIR / "settings.json"
@@ -27,6 +28,7 @@ class Settings:
         self.THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
         self.TRANSCODED_DIR.mkdir(parents=True, exist_ok=True)
         self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self.STRIPPED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.MODELS_DIR.mkdir(parents=True, exist_ok=True)
         
@@ -132,7 +134,8 @@ class Settings:
                     "source": ["dc:description", "ImageDescription", "source"],
                     "description": ["UserComment", "Description", "description"]
                 }
-            }
+            },
+            "stripped_cache_max_mb": 0
         }
     
     def get_items_per_page(self) -> int:
@@ -441,5 +444,26 @@ class Settings:
         }
         saved = self.file_settings.get("metadata_parsers") or self.settings.get("metadata_parsers", {})
         return {**defaults, **saved}
+
+    @property
+    def STRIPPED_CACHE_MAX_MB(self) -> int:
+        """Get max size of stripped cache in MB (0 = unlimited)."""
+        val = self.file_settings.get("stripped_cache_max_mb")
+        if val is not None:
+            try:
+                return max(0, int(val))
+            except (ValueError, TypeError):
+                pass
+        env_val = os.getenv("BLOMBOORU_STRIPPED_CACHE_MAX_MB")
+        if env_val:
+            try:
+                return max(0, int(env_val))
+            except (ValueError, TypeError):
+                pass
+        val = self.settings.get("stripped_cache_max_mb", 0)
+        try:
+            return max(0, int(val))
+        except (ValueError, TypeError):
+            return 0
 
 settings = Settings()
