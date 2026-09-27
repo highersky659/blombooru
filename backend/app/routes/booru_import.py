@@ -12,8 +12,9 @@ from ..auth import require_admin_mode
 from ..config import settings
 from ..utils.request_helpers import safe_error_detail
 from ..database import get_db
-from ..models import Media, Tag, User
-from ..services.booru import BooruPost, BooruTag, get_client_for_url
+from ..models import Media, User
+from ..services.booru import (BooruPost, get_client_for_url,
+                             get_user_agent_for_url)
 from ..utils.album_utils import set_media_albums
 from ..utils.cache import (invalidate_media_cache, invalidate_tag_cache)
 from ..utils.logger import logger
@@ -302,7 +303,7 @@ async def proxy_image(
             timeout=60,
             allow_redirects=False,
             headers={
-                "User-Agent": "Blombooru/1.0 (booru-import)",
+                "User-Agent": get_user_agent_for_url(url, db=db),
                 "Referer": referer,
             },
         )

@@ -170,7 +170,8 @@ async def update_from_source(
 
         import requests as _requests
         try:
-            headers = {"User-Agent": "Blombooru/1.0 (booru-import)"}
+            from ..services.booru import get_user_agent_for_url
+            headers = {"User-Agent": get_user_agent_for_url(req.file_url, db=db)}
             dl = _requests.get(req.file_url, headers=headers, timeout=60, stream=True)
             dl.raise_for_status()
         except _requests.HTTPError as e:

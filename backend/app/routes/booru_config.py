@@ -3,11 +3,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth import require_admin_mode
 from ..database import get_db
 from ..models import BooruConfig, User
+from ..services.booru.factory import clear_client_cache
 
 router = APIRouter(prefix="/api/booru-config", tags=["booru-config"])
 
@@ -80,6 +82,7 @@ async def create_or_update_booru_config(
     
     db.commit()
     db.refresh(config)
+    clear_client_cache()
     
     return BooruConfigResponse(
         domain=config.domain,
@@ -96,10 +99,13 @@ async def delete_booru_config(
     db: Session = Depends(get_db)
 ):
     """Delete a booru configuration."""
-    config = db.query(BooruConfig).filter(BooruConfig.domain == domain).first()
+    domain_clean = domain.strip().lower()
+    config = db.query(BooruConfig).filter(func.lower(BooruConfig.domain) == domain_clean).first()
     if not config:
         raise HTTPException(status_code=404, detail="admin.settings.booru_config.error_not_found")
         
     db.delete(config)
     db.commit()
+    clear_client_cache()
+
     return {"status": "success", "message_key": "admin.settings.booru_config.delete_success", "message_args": {"domain": domain}}
