@@ -14,10 +14,11 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..config import settings
 from ..enums import FileTypeEnum, RatingEnum, TagCategoryEnum
-from ..models import (Album, BooruConfig, Media, Tag, TagAlias, TagImplication,
+from ..models import (Album, Media, Tag, TagAlias, TagImplication,
                       blombooru_album_hierarchy, blombooru_album_media,
                       blombooru_media_tags)
 from ..routes.media import update_tag_counts
+from ..services.booru import normalize_domain, upsert_booru_config
 from ..utils.cache import (invalidate_album_cache, invalidate_media_cache,
                            invalidate_tag_cache)
 from ..utils.logger import logger
@@ -727,32 +728,19 @@ def import_booru_config_logical(db: Session, booru_config_list: List[dict]) -> d
     imported_count = 0
 
     for cfg in booru_config_list:
-        domain = (cfg.get('domain') or '').strip().lower()
-        if "://" in domain:
-            domain = domain.split("://")[1]
-        if domain.endswith("/"):
-            domain = domain[:-1]
-
+        domain = normalize_domain(cfg.get('domain'))
         if not domain:
             continue
 
         username = cfg.get('username')
         api_key = cfg.get('api_key')
 
-        existing = db.query(BooruConfig).filter(BooruConfig.domain == domain).first()
-        if existing:
-            if username is not None:
-                existing.username = username
-            if api_key is not None:
-                existing.api_key = api_key
-            existing.updated_at = datetime.now(timezone.utc)
-        else:
-            new_cfg = BooruConfig(
-                domain=domain,
-                username=username,
-                api_key=api_key
-            )
-            db.add(new_cfg)
+        upsert_booru_config(
+            db,
+            domain=domain,
+            username=username,
+            api_key=api_key,
+        )
         imported_count += 1
 
     db.commit()

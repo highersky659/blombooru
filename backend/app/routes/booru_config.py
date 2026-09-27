@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from ..auth import require_admin_mode
 from ..database import get_db
 from ..models import BooruConfig, User
-from ..services.booru.factory import clear_client_cache
+from ..services.booru import (clear_client_cache, normalize_domain,
+                             upsert_booru_config)
 
 router = APIRouter(prefix="/api/booru-config", tags=["booru-config"])
 
@@ -55,30 +56,16 @@ async def create_or_update_booru_config(
     db: Session = Depends(get_db)
 ):
     """Create or update a booru configuration."""
-    # Normalize domain
-    domain = idx.domain.strip().lower()
-    if "://" in domain:
-        domain = domain.split("://")[1]
-    if domain.endswith("/"):
-        domain = domain[:-1]
+    domain = normalize_domain(idx.domain)
+    if not domain:
+        raise HTTPException(status_code=400, detail="admin.settings.booru_config.error_domain_required")
 
-    config = db.query(BooruConfig).filter(BooruConfig.domain == domain).first()
-    
-    if config:
-        # Update
-        if idx.username is not None:
-            config.username = idx.username
-        if idx.api_key is not None:
-            config.api_key = idx.api_key
-        config.updated_at = datetime.now(timezone.utc)
-    else:
-        # Create
-        config = BooruConfig(
-            domain=domain,
-            username=idx.username,
-            api_key=idx.api_key
-        )
-        db.add(config)
+    config = upsert_booru_config(
+        db,
+        domain=domain,
+        username=idx.username,
+        api_key=idx.api_key,
+    )
     
     db.commit()
     db.refresh(config)
@@ -99,12 +86,13 @@ async def delete_booru_config(
     db: Session = Depends(get_db)
 ):
     """Delete a booru configuration."""
-    domain_clean = domain.strip().lower()
-    config = db.query(BooruConfig).filter(func.lower(BooruConfig.domain) == domain_clean).first()
-    if not config:
+    domain_clean = normalize_domain(domain)
+    configs = db.query(BooruConfig).filter(func.lower(BooruConfig.domain) == domain_clean).all()
+    if not configs:
         raise HTTPException(status_code=404, detail="admin.settings.booru_config.error_not_found")
         
-    db.delete(config)
+    for config in configs:
+        db.delete(config)
     db.commit()
     clear_client_cache()
 
