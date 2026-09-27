@@ -236,9 +236,10 @@ async def get_models(
                 "is_loaded": (current_model == model_name),
                 "is_downloading": WDTagger.is_downloading(model_name),
                 "speed_rank": WDTagger.MODEL_SPEED_RANKING.get(model_name, 99),
+                "accuracy_rank": WDTagger.MODEL_ACCURACY_RANKING.get(model_name, 99),
             })
         
-        models_info.sort(key=lambda x: x["speed_rank"])
+        models_info.sort(key=lambda x: x["accuracy_rank"])
         return models_info
         
     except ImportError as e:
@@ -263,6 +264,7 @@ async def get_model_status(
         is_downloaded = WDTagger.is_model_downloaded(model_name)
         
         model_sizes = {
+            "pixai-tagger-v1.0": 935,
             "wd-eva02-large-tagger-v3": 850,
             "wd-vit-tagger-v3": 350,
             "wd-swinv2-tagger-v3": 450,
