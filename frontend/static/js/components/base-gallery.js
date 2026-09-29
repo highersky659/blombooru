@@ -1586,6 +1586,18 @@ class BaseGallery {
             markLoaded();
         }
 
+        // Wrapper for blurring the image but keeping crisp borders
+        let blurWrapperOrImg = img;
+        if (media.rating == "explicit") {
+            const blurWrapper = document.createElement('div');
+            blurWrapper.classList.add('blur-wrapper');
+            blurWrapper.appendChild(img);
+            console.log(blurWrapperOrImg, blurWrapper, img);
+            blurWrapperOrImg = blurWrapper;
+
+            item.classList.add('blur-content');
+        }
+
         // Link
         const link = document.createElement('a');
         const basePath = linkUrl || `/media/${media.id}`;
@@ -1596,7 +1608,7 @@ class BaseGallery {
         } else {
             link.href = basePath;
         }
-        link.appendChild(img);
+        link.appendChild(blurWrapperOrImg);
 
         link.addEventListener('click', (e) => {
             if (app.isAdminMode && this.isSelectionMode) {

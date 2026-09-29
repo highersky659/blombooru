@@ -529,6 +529,25 @@ a.tag:hover {
     object-fit: contain;
 }
 
+.gallery-item.blur-content .blur-wrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+.gallery-item.blur-content .blur-wrapper > img {
+  filter: blur(8px);
+  border: none;
+}
+
+.gallery-item.blur-content .blur-wrapper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--border);
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* Popular tag styling */
 .popular-tag-item {
     align-items: center;
